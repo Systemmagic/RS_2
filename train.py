@@ -1,5 +1,6 @@
 import os
 import torch
+import numpy as np
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
@@ -126,6 +127,10 @@ def main():
     os.makedirs(config.OUTPUT_DIR, exist_ok=True)
     predict_and_export_n_days(model, train_dataset, device, config.OUTPUT_DIR, start_day_idx=0, n_days=7)
     print(f"\n任务完成! 结果保存在: {config.OUTPUT_DIR}")
+    # 训练循环结束后添加
+    model_path = os.path.join(config.OUTPUT_DIR, "trained_model.pth")
+    torch.save(model.state_dict(), model_path)
+    print(f"✅ 训练好的模型已保存至: {model_path}")
 
 if __name__ == "__main__":
     main()
