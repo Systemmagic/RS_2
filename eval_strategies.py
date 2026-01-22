@@ -31,24 +31,19 @@ def sliding_window_rolling_test(
     
     with torch.no_grad():
         for i in tqdm(range(start_idx, total_windows, step), desc="滚动测试进度"):
+            # --- 修复1：窗口数据加载后直接移到GPU ---
             end_idx = i + window_size
-            if end_idx > total_samples:
-                continue
-            
-            # 1. 加载窗口内的帧并构建序列（匹配train.py）
             window_frames = [dataset[idx] for idx in range(i, end_idx)]
-            # 校验单帧维度并补通道维（关键修复）
             seq_img_list = []
             for frame in window_frames:
                 img = frame[0]
-                if len(img.shape) == 2:  # 无通道维：[256,256] → [1,256,256]
+                if len(img.shape) == 2:
                     img = img.unsqueeze(0)
+                img = img.to(device)  # 新增：单帧加载后立即移到GPU
                 seq_img_list.append(img)
-            seq_img = torch.stack(seq_img_list)  # [4,1,256,256]
-            seq_img = seq_img.unsqueeze(0).to(device)  # [1,4,1,256,256]
-            # 其他序列构建（同理校验）
-            seq_meteo = torch.stack([frame[1] for frame in window_frames]).unsqueeze(0).to(device)
-            mask = torch.stack([frame[2] for frame in window_frames]).unsqueeze(0).to(device)
+            seq_img = torch.stack(seq_img_list).unsqueeze(0)  # 移除原to(device)，避免重复移动
+            seq_meteo = torch.stack([frame[1].to(device) for frame in window_frames]).unsqueeze(0)
+            mask = torch.stack([frame[2].to(device) for frame in window_frames]).unsqueeze(0)
             
             # 2. 核心修复：强制确保x_curr为4维
             x_curr = seq_img[:, 0]  # 取第0帧
@@ -80,7 +75,11 @@ def sliding_window_rolling_test(
             targets_tensor = seq_img[:, 1:].squeeze(0)
             mask_tensor = mask[:, 1:].squeeze(0)
             
-            metrics = calculate_decoding_metrics(preds_tensor, targets_tensor, mask_tensor)
+            metrics = calculate_decoding_metrics(
+                preds_tensor,  # 已在GPU
+                targets_tensor,  # 已在GPU
+                mask_tensor  # 已在GPU
+            )
             all_metrics.append(metrics)
     
     return all_metrics
@@ -109,7 +108,7 @@ def iterative_optimize_decoder(
     for epoch in range(optimize_epochs):
         total_decoder_loss = 0
         for seq_img, seq_meteo, mask in test_loader:
-            seq_img = seq_img.to(device)
+            seq_img = seq_img.to(device)  # 确保最终在GPU
             seq_meteo = seq_meteo.to(device)
             mask = mask.to(device)
             

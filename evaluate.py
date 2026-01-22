@@ -37,39 +37,53 @@ def main():
     # 【关键】先运行train.py并保存模型（需修改train.py最后添加模型保存逻辑）
     model = load_trained_model(config, device)
     
-    # 3. 第一步：滑动窗口+滚动测试评估解码效果（GPU参数透传，对齐train.py）
+    # 3. 滑动窗口+滚动测试评估
     initial_metrics = sliding_window_rolling_test(
-        model=model,               # 模型（已绑定GPU）
-        dataset=dataset,           # 测试数据集
-        window_size=config.SEQUENCE_LENGTH,  # 对齐训练的序列长度（比如7）
-        step=1,                    # 步长
-        device=device,             # 设备（透传，确保内部张量在GPU）
-        start_idx=0                # 起始索引
+        model=model,
+        dataset=dataset,
+        window_size=config.SEQUENCE_LENGTH,
+        step=1,
+        device=device,
+        start_idx=0
     )
-    print("\n=== 优化前解码效果指标 ===")
-    for k, v in initial_metrics.items():
-        print(f"{k}: {v}")
+    # --- 修复：聚合指标 + 空值保护 ---
+    if not initial_metrics:
+        print("\n=== 优化前解码效果指标 ===")
+        print("⚠️ 无有效评估数据")
+        initial_agg_metrics = {}
+    else:
+        initial_agg_metrics = aggregate_metrics(initial_metrics)
+        print("\n=== 优化前解码效果指标 ===")
+        for k, v in initial_agg_metrics.items():
+            print(f"{k}: {v}")
     
-    # 4. 第二步：迭代优化解码模块（GPU参数透传，对齐train.py）
+    # 4. 迭代优化解码模块
     optimized_model, optimized_metrics = iterative_optimize_decoder(
         model, dataset, device, config,
-        eval_metrics=initial_metrics,
+        eval_metrics=initial_agg_metrics,  # 传入聚合后的指标
         optimize_epochs=config.OPTIMIZE_EPOCHS,
         lr=config.OPTIMIZE_LR
     )
-    print("\n=== 优化后解码效果指标 ===")
-    for k, v in optimized_metrics.items():
-        print(f"{k}: {v}")
+    # --- 修复：聚合优化后指标 ---
+    if not optimized_metrics:
+        print("\n=== 优化后解码效果指标 ===")
+        print("⚠️ 无有效优化后数据")
+        optimized_agg_metrics = {}
+    else:
+        optimized_agg_metrics = aggregate_metrics(optimized_metrics)
+        print("\n=== 优化后解码效果指标 ===")
+        for k, v in optimized_agg_metrics.items():
+            print(f"{k}: {v}")
     
-    # 5. 保存评估结果（无GPU相关改动，仅保留原逻辑）
+    # 5. 保存评估结果（替换为聚合后的指标）
     eval_result = {
         "config": {
-            "window_size": config.EVAL_WINDOW_SIZE,
-            "step_size": config.EVAL_STEP_SIZE,
+            "window_size": config.SEQUENCE_LENGTH,  # 原代码错用EVAL_WINDOW_SIZE，需对齐
+            "step_size": 1,
             "optimize_epochs": config.OPTIMIZE_EPOCHS
         },
-        "initial_metrics": initial_metrics,
-        "optimized_metrics": optimized_metrics
+        "initial_metrics": initial_agg_metrics,
+        "optimized_metrics": optimized_agg_metrics
     }
     result_path = os.path.join(config.OUTPUT_DIR, "decoding_evaluation.json")
     with open(result_path, "w", encoding="utf-8") as f:
