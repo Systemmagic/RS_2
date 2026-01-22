@@ -26,7 +26,12 @@ class Config:
     # 动力学参数
     W_SPECTRAL = 0.005
     EIGEN_MAX = 2.0          
-    EIGEN_MIN = 0.8 
+    EIGEN_MIN = 0.8
+    
+    # Koopman损失权重
+    ALPHA1 = 0.1            # 重建损失和预测损失权重
+    ALPHA2 = 0.05           # L∞损失权重
+    ALPHA3 = 0.01           # L2正则化权重
     
     # 评估配置
     EVAL_WINDOW_SIZE = 7    # 滚动测试窗口大小

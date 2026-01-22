@@ -4,6 +4,44 @@ from config import Config
 from models.encoder import ResNetEncoder
 from models.decoder import ResNetDecoder
 
+class SchurKoopmanLayer(nn.Module):
+    """
+    基于舒尔分解 (Schur Decomposition) 的 Koopman 层
+    K = U T U^T
+    - U: 正交矩阵 (Orthogonal)，负责坐标变换 (旋转)
+    - T: 上三角矩阵 (Upper Triangular)，对角线控制稳定性，上三角控制短期增长
+    """
+    def __init__(self, dim, max_scale=0.99):
+        super().__init__()
+        self.dim = dim
+        self.max_scale = max_scale
+        
+        # 构造正交矩阵 U 的参数（斜对称矩阵）
+        self.U_param = nn.Parameter(torch.randn(dim, dim) * 0.01)
+        
+        # 构造上三角矩阵 T 的参数
+        self.lambda_proxies = nn.Parameter(torch.randn(dim))  # 对角线部分（特征值）
+        self.T_upper_param = nn.Parameter(torch.randn(dim, dim) * 0.01)  # 上三角部分
+
+    def get_K(self):
+        # 步骤 A: 构造正交基 U
+        skew_symmetric = self.U_param - self.U_param.t()
+        U = torch.linalg.matrix_exp(skew_symmetric)
+        
+        # 步骤 B: 构造上三角矩阵 T
+        eigenvalues = torch.tanh(self.lambda_proxies) * self.max_scale  # 控制特征值在(-max_scale, max_scale)
+        T_diag = torch.diag(eigenvalues)
+        T_strict_upper = torch.triu(self.T_upper_param, diagonal=1)  # 严格上三角部分
+        T = T_diag + T_strict_upper
+        
+        # 步骤 C: 重组 K = U T U^T
+        K = U @ T @ U.t()
+        return K
+
+    def forward(self, x):
+        K = self.get_K()
+        return torch.nn.functional.linear(x, K)  # 等价于 x @ K.T
+
 class ControlledKoopmanModel(nn.Module):
     """带气象控制的Koopman模型：核心动力学逻辑"""
     def __init__(self, config: Config):
