@@ -12,19 +12,26 @@ class EnhancedPM25Dataset(Dataset):
     def __init__(self, data_dir, config: Config, augment=False):    
         self.config = config
         self.augment = augment
-        self.file_paths = sorted(glob.glob(os.path.join(data_dir, "*.tif")))
-        if not self.file_paths:
+        
+        # 加载全年文件路径（用于预测时访问）
+        self.all_file_paths = sorted(glob.glob(os.path.join(data_dir, "*.tif")))
+        if not self.all_file_paths:
             raise FileNotFoundError(f"No .tif files found in {data_dir}")
         
-        print(f"---Dataset: {len(self.file_paths)} files. Res={config.IMG_SIZE}, Control={config.USE_METEO_CONTROL}---")
+        # 按配置范围筛选训练数据
+        self.train_start_idx = config.TRAIN_START_IDX
+        self.train_end_idx = config.TRAIN_END_IDX + 1  # +1 使其包含 end_idx
+        self.file_paths = self.all_file_paths[self.train_start_idx:self.train_end_idx]
+        
+        print(f"---Dataset: {len(self.all_file_paths)} files (全年) | 训练数据: {len(self.file_paths)} files [{config.TRAIN_START_IDX}-{config.TRAIN_END_IDX}]. Res={config.IMG_SIZE}, Control={config.USE_METEO_CONTROL}---")
         
         # 读取地理参考信息
-        ref_ds = gdal.Open(self.file_paths[0])
+        ref_ds = gdal.Open(self.all_file_paths[0])
         self.orig_w, self.orig_h = ref_ds.RasterXSize, ref_ds.RasterYSize
         self.geo_transform = ref_ds.GetGeoTransform()
         self.projection = ref_ds.GetProjection()
         
-        # 加载图像数据
+        # 加载训练数据
         self.data = self._load_data()
         self.global_min, self.global_max = np.min(self.data), np.max(self.data)
         print(f"Data Loaded. Range: [{self.global_min:.2f}, {self.global_max:.2f}]")
@@ -36,7 +43,7 @@ class EnhancedPM25Dataset(Dataset):
         """加载并预处理TIFF数据（padding + resize）"""
         data = []
         max_side = max(self.orig_w, self.orig_h)
-        for p in self.file_paths:
+        for p in self.file_paths:  # 使用筛选后的训练数据文件
             ds = gdal.Open(p)
             arr = ds.GetRasterBand(1).ReadAsArray()
             # Padding到正方形

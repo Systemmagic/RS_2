@@ -53,6 +53,11 @@ class ControlledKoopmanModel(nn.Module):
         # Koopman演化矩阵
         self.K = nn.Linear(config.LATENT_DIM, config.LATENT_DIM, bias=False)
         
+        # 残差Koopman权重（0-1，控制线性vs残差的比例）
+        # 当alpha=1时：z_next = K(z) （标准Koopman）
+        # 当alpha=0时：z_next = z + ΔK(z) （纯残差，保留极值）
+        self.alpha = nn.Parameter(torch.tensor(0.5))  # 初始化为0.5，让模型自己学习最优比例
+        
         # 控制矩阵（按开关初始化）
         if config.USE_METEO_CONTROL:
             self.B = nn.Linear(config.METEO_DIM, config.LATENT_DIM, bias=False)
@@ -69,12 +74,22 @@ class ControlledKoopmanModel(nn.Module):
         """单次前向：从当前地图预测下一时刻地图"""
         # 编码为1D向量
         z_t = self.encoder(x_current)
-        # Koopman动力学演化（K*z + B*u）
-        z_next_pred = self.K(z_t) + self.compute_control(u_current)
+        
+        # 混合Koopman：线性 + 残差
+        # 当alpha大时，更倾向于标准Koopman（z_next = K(z))
+        # 当alpha小时，更倾向于残差形式（z_next = z + ΔK(z))
+        alpha_clipped = torch.sigmoid(self.alpha)  # 限制在[0,1]
+        z_linear = self.K(z_t)
+        z_residual = z_t + (z_linear - z_t)  # 残差形式，保留原值
+        z_next_pred = alpha_clipped * z_linear + (1 - alpha_clipped) * z_residual
+        
+        # 添加控制项
+        z_next_pred = z_next_pred + self.compute_control(u_current)
+        
         # 解码残差
         delta = self.decoder(z_next_pred)
         # 物理残差更新
-        x_next_pred = torch.relu(x_current + delta)
+        x_next_pred = torch.clamp(x_current + delta, min=0.0, max=1.0)
         return x_next_pred, z_t, z_next_pred
 
     def predict_future(self, x_start, u_sequence, steps):
@@ -83,13 +98,19 @@ class ControlledKoopmanModel(nn.Module):
         x_curr = x_start
         z_curr = self.encoder(x_curr)
         
+        alpha_clipped = torch.sigmoid(self.alpha)
+        
         for t in range(steps):
             u_t = u_sequence[t].unsqueeze(0).to(x_start.device)
-            # 动力学演化
-            z_curr = self.K(z_curr) + self.compute_control(u_t)
+            # 混合动力学演化
+            z_linear = self.K(z_curr)
+            z_residual = z_curr + (z_linear - z_curr)
+            z_curr = alpha_clipped * z_linear + (1 - alpha_clipped) * z_residual
+            z_curr = z_curr + self.compute_control(u_t)
+            
             # 解码+残差更新
             delta = self.decoder(z_curr)
-            x_next = torch.relu(x_curr + delta)
+            x_next = torch.clamp(x_curr + delta, min=0.0, max=1.0)
             
             preds.append(x_next)
             x_curr = x_next
